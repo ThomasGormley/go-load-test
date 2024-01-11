@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 )
 
 type Requester interface {
@@ -13,12 +14,14 @@ type Requester interface {
 }
 
 type requestPool struct {
-	createClient      func() Requester
-	clients           []Requester
-	idleClients       []Requester
-	clientMu          sync.Mutex
+	createClient func() Requester
+	clients      []Requester
+	idleClients  []Requester
+	clientMu     sync.Mutex
+
 	requestsPerSecond int
 	numberOfRequests  int
+	maxRequests       int
 	size              int
 	url               string
 
@@ -44,6 +47,9 @@ func (c httpClient) Request(url string) error {
 		return err
 	}
 
+	// r := rand.Intn(3)
+	time.Sleep(3 * time.Second)
+
 	// defer resp.Body.Close()
 	// _, err := io.ReadAll(resp.Body)
 
@@ -55,36 +61,63 @@ func (c httpClient) Request(url string) error {
 	return nil
 }
 
-func (p *requestPool) startRequests(wg *sync.WaitGroup) {
+func (pool *requestPool) startRequests(wg *sync.WaitGroup) {
 	defer wg.Done()
+	var requestCount int
 	for {
-		if p.clientPoolExhausted() {
-			p.clientMu.Unlock()
+		if pool.exhausted() {
+			fmt.Println("exhausted")
 			continue
 		}
 
-		p.clientMu.Lock()
-		client := p.idleClients[0]
-		p.idleClients = p.idleClients[1:]
-		p.clientMu.Unlock()
+		client, err := pool.fetchClient()
 
-		if err := client.Request(p.url); err != nil {
+		if err != nil {
+			// error fetching client, retry
+			fmt.Println("Error fetching client: ", err.Error())
+			continue
+		}
+
+		if err := client.Request(pool.url); err != nil {
 			fmt.Println("Error during request: ", err)
 		}
 
-		p.incrementRequestCount()
-		shouldBreak := p.numberOfRequests > 0 && p.requestCount >= p.numberOfRequests
+		requestCount++
+		pool.incTotalRequestCount()
+
+		pool.requestCountMu.Lock()
+		maxRequestsExceeded := pool.maxRequests > 0 && pool.requestCount >= pool.maxRequests
+		numberOfRequestsExeeded := pool.numberOfRequests > 0 && requestCount >= pool.numberOfRequests
+		pool.requestCountMu.Unlock()
+
+		shouldBreak := maxRequestsExceeded || numberOfRequestsExeeded
 		if shouldBreak {
 			break
 		}
-		p.clientMu.Lock()
-		p.idleClients = append(p.idleClients, client)
-		p.clientMu.Unlock()
+
+		pool.returnClient(client)
 	}
 
 }
 
-func (p *requestPool) incrementRequestCount() int {
+func (p *requestPool) returnClient(client Requester) {
+	p.clientMu.Lock()
+	p.idleClients = append(p.idleClients, client)
+	p.clientMu.Unlock()
+}
+
+func (p *requestPool) fetchClient() (Requester, error) {
+	if p.exhausted() {
+		return nil, fmt.Errorf("client pool exhausted")
+	}
+	p.clientMu.Lock()
+	client := p.idleClients[0]
+	p.idleClients = p.idleClients[1:]
+	p.clientMu.Unlock()
+	return client, nil
+}
+
+func (p *requestPool) incTotalRequestCount() int {
 
 	p.requestCountMu.Lock()
 	defer p.requestCountMu.Unlock()
@@ -93,11 +126,14 @@ func (p *requestPool) incrementRequestCount() int {
 	return p.requestCount
 }
 
-func (p *requestPool) clientPoolExhausted() bool {
+func (p *requestPool) exhausted() bool {
 	p.clientMu.Lock()
 	defer p.clientMu.Unlock()
 	c := len(p.idleClients)
 
+	if c == 0 {
+		fmt.Println("pool exhausted")
+	}
 	return c == 0
 }
 
@@ -134,6 +170,7 @@ func Run(url string, concurrency, numberOfRequests int) error {
 		return createRequestClient(url)
 	}
 
+	fmt.Println("Number of requests:", numberOfRequests)
 	p := requestPool{
 		createClient:      createClient,
 		requestsPerSecond: 1,
