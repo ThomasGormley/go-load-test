@@ -13,7 +13,7 @@ import (
 func run(args []string) error {
 
 	concurrency := flag.Int("c", 10, "concurrency")
-	numberOfRequests := flag.Int("n", 1, "number of requests")
+	numberOfRequests := flag.Int("n", 0, "number of requests")
 
 	flag.Parse()
 
