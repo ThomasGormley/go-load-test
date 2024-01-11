@@ -29,9 +29,7 @@ func run(args []string) error {
 		log.Fatalf("URL protocol must match one of: http, https. Got: %s", url)
 	}
 
-	loadtest := loadtest.New(url, *concurrency, *numberOfRequests)
-
-	return loadtest.Run()
+	return loadtest.Run(url, *concurrency, *numberOfRequests)
 }
 
 func main() {

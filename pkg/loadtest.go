@@ -4,36 +4,30 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 	"sync"
 )
-
-type loadTest struct {
-	url              string
-	concurrency      int
-	numberOfRequests int
-}
 
 type Requester interface {
 	Request(url string) error
 }
 
-type pool struct {
+type requestPool struct {
+	createClient      func() Requester
 	clients           []Requester
 	idleClients       []Requester
 	clientMu          sync.Mutex
 	requestsPerSecond int
 	numberOfRequests  int
-	concurrency       int
+	size              int
 	url               string
 
 	requestCount   int
 	requestCountMu sync.Mutex
 }
 
-func (p *pool) addClient() Requester {
-	client := httpClient{
-		url: p.url,
-	}
+func (p *requestPool) addClient() Requester {
+	client := p.createClient()
 	p.clients = append(p.clients, client)
 	p.idleClients = append(p.clients, client)
 	return client
@@ -61,7 +55,7 @@ func (c httpClient) Request(url string) error {
 	return nil
 }
 
-func (p *pool) startRequests(wg *sync.WaitGroup) {
+func (p *requestPool) startRequests(wg *sync.WaitGroup) {
 	defer wg.Done()
 	for {
 		if p.clientPoolExhausted() {
@@ -90,7 +84,7 @@ func (p *pool) startRequests(wg *sync.WaitGroup) {
 
 }
 
-func (p *pool) incrementRequestCount() int {
+func (p *requestPool) incrementRequestCount() int {
 
 	p.requestCountMu.Lock()
 	defer p.requestCountMu.Unlock()
@@ -99,7 +93,7 @@ func (p *pool) incrementRequestCount() int {
 	return p.requestCount
 }
 
-func (p *pool) clientPoolExhausted() bool {
+func (p *requestPool) clientPoolExhausted() bool {
 	p.clientMu.Lock()
 	defer p.clientMu.Unlock()
 	c := len(p.idleClients)
@@ -107,12 +101,12 @@ func (p *pool) clientPoolExhausted() bool {
 	return c == 0
 }
 
-func (p *pool) start() {
+func (p *requestPool) start() {
 
 	var wg sync.WaitGroup
 
-	for i := 0; i < p.concurrency; i++ {
-		fmt.Printf("%d < %d\n", i, p.concurrency)
+	for i := 0; i < p.size; i++ {
+		fmt.Printf("%d < %d\n", i, p.size)
 		wg.Add(1)
 		p.addClient()
 		go p.startRequests(&wg)
@@ -121,22 +115,31 @@ func (p *pool) start() {
 	wg.Wait()
 }
 
-func New(url string, c, n int) *loadTest {
-	return &loadTest{
-		url:              url,
-		concurrency:      c,
-		numberOfRequests: n,
+func createRequestClient(url string) Requester {
+	if strings.HasPrefix(url, "http://") || strings.HasPrefix(url, "https://") {
+		return httpClient{
+			url: url,
+		}
+	}
+
+	return httpClient{
+		url: url,
 	}
 }
 
-func (lt loadTest) Run() error {
-	fmt.Printf("Running load test on %s with concurrency %d and %d requests\n", lt.url, lt.concurrency, lt.numberOfRequests)
+func Run(url string, concurrency, numberOfRequests int) error {
+	fmt.Printf("Running load test on %s with concurrency %d and %d requests\n", url, concurrency, numberOfRequests)
 
-	p := pool{
+	createClient := func() Requester {
+		return createRequestClient(url)
+	}
+
+	p := requestPool{
+		createClient:      createClient,
 		requestsPerSecond: 1,
-		concurrency:       lt.concurrency,
-		url:               lt.url,
-		numberOfRequests:  lt.numberOfRequests,
+		size:              concurrency,
+		numberOfRequests:  numberOfRequests,
+		url:               url,
 	}
 
 	p.start()
