@@ -3,6 +3,7 @@ package loadtest
 import (
 	"fmt"
 	"log/slog"
+	"math/rand"
 	"net/http"
 	"strings"
 	"sync"
@@ -47,8 +48,8 @@ func (c httpClient) Request(url string) error {
 		return err
 	}
 
-	// r := rand.Intn(3)
-	time.Sleep(3 * time.Second)
+	r := rand.Intn(5)
+	time.Sleep(time.Duration(r) * time.Second)
 
 	// defer resp.Body.Close()
 	// _, err := io.ReadAll(resp.Body)
@@ -65,16 +66,10 @@ func (pool *requestPool) startRequests(wg *sync.WaitGroup) {
 	defer wg.Done()
 	var requestCount int
 	for {
-		if pool.exhausted() {
-			fmt.Println("exhausted")
-			continue
-		}
-
 		client, err := pool.fetchClient()
 
 		if err != nil {
-			// error fetching client, retry
-			fmt.Println("Error fetching client: ", err.Error())
+			fmt.Println("Error fetching client:", err.Error())
 			continue
 		}
 
@@ -130,10 +125,6 @@ func (p *requestPool) exhausted() bool {
 	p.clientMu.Lock()
 	defer p.clientMu.Unlock()
 	c := len(p.idleClients)
-
-	if c == 0 {
-		fmt.Println("pool exhausted")
-	}
 	return c == 0
 }
 
